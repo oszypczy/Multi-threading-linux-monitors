@@ -21,7 +21,8 @@
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
-                "${file}",
+                "${workspaceFolder}/monitor.cpp",
+                "${workspaceFolder}/threads.cpp",
                 "-o",
                 "${fileDirname}/${fileBasenameNoExtension}"
             ],

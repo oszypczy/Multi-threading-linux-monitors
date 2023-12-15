@@ -11,15 +11,19 @@
 #include <string>
 #include <unordered_map>
 #include "nlohmann/json.hpp"
+#include "monitor.h"
 
-int K = -1; // Max size of the buffer
-int n, m = -1; // Number of consumer and producer threads
-int a, b = -1; // Numbers that consumer will choose from
-int c, d = -1; // Numbers that producer will choose from
-pthread_mutex_t mutex;
-sem_t producer;
-sem_t consumer;
+int K = 10; // Max size of the buffer
+int n, m = 6; // Number of consumer and producer threads
+int a = 2;
+int b = 3;
+int c = 2;
+int d = 3;
+
 int failures = 0; // Number of failed attempts to consume/produce
+Monitor mutexMonitor;
+Monitor consumerMonitor;
+Monitor producerMonitor;
 
 using json = nlohmann::json;
 
@@ -94,6 +98,15 @@ std::string generateMessage(std::string threadName, std::time_t time, std::strin
     return "ID: " + threadName + "; Time stamp: " + formattedTime + "; Message: " + message;
 }
 
+void get_input(int& variable, const std::string& name) {
+    std::string input_string;
+    std::cout << "Enter a value for " << name << " (current value: " << variable << "): ";
+    std::getline(std::cin, input_string);
+    if (!input_string.empty()) {
+        variable = std::stoi(input_string);
+    }
+}
+
 void* consumerThread(void* arg) {
     int threadId = *(reinterpret_cast<int*>(arg));
     std::string threadName = "cons_" + std::to_string(threadId); 
@@ -103,8 +116,8 @@ void* consumerThread(void* arg) {
 
     while (true) {
         consumerTurn = true;
-        sem_wait(&consumer);
-        pthread_mutex_lock(&mutex);
+        consumerMonitor.enter();
+        mutexMonitor.enter();
         int warehouse_content = getWarehouseContent();
         if (warehouse_content >= consumedProducts) {
             setWarehouseContent(warehouse_content - consumedProducts);
@@ -127,11 +140,11 @@ void* consumerThread(void* arg) {
             }
         }
         sleep(1);
-        pthread_mutex_unlock(&mutex);
+        mutexMonitor.leave();
         if (consumerTurn) {
-            sem_post(&consumer);
+            consumerMonitor.leave();
         } else {
-            sem_post(&producer);
+            producerMonitor.leave();
         }
         sleep(1);
     }
@@ -148,8 +161,8 @@ void* producerThread(void* arg) {
 
     while (true) {
         producerTurn = true;
-        sem_wait(&producer);
-        pthread_mutex_lock(&mutex);
+        producerMonitor.enter();
+        mutexMonitor.enter();
         int warehouse_content = getWarehouseContent();
         if (warehouse_content + producedProducts <= K) {
             setWarehouseContent(warehouse_content + producedProducts);
@@ -171,11 +184,11 @@ void* producerThread(void* arg) {
             }
         }
         sleep(1);
-        pthread_mutex_unlock(&mutex);
+        mutexMonitor.leave();
         if (producerTurn) {
-            sem_post(&producer);
+            producerMonitor.leave();
         } else {
-            sem_post(&consumer);
+            consumerMonitor.leave();
         }
         sleep(1);
     }
@@ -184,6 +197,8 @@ void* producerThread(void* arg) {
 }
 
 int main(int argc, char *argv[]) {
+
+    bool interactive = false;
 
     // Open config file
     std::ifstream configFile("config.json");
@@ -198,13 +213,15 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        K = config.value("warehaouseSize", -1);
-        n = config.value("numberOfConsumers", -1);
-        m = config.value("numberOfProducers", -1);
-        a = config.value("a", -1);
-        b = config.value("b", -1);
-        c = config.value("c", -1);
-        d = config.value("d", -1);
+        std::cout << "Gathering data from config.json..." << std::endl;
+
+        K = config.value("warehaouseSize", K);
+        n = config.value("numberOfConsumers", n);
+        m = config.value("numberOfProducers", m);
+        a = config.value("a", a);
+        b = config.value("b", b);
+        c = config.value("c", c);
+        d = config.value("d", d);
 
     } else {
         std::cerr << "No such file as: config.json. Gathering data from console..." << std::endl;
@@ -224,19 +241,42 @@ int main(int argc, char *argv[]) {
         {"-c", &c},
         {"--lower-c-bound", &c},
         {"-d", &d},
-        {"--upper-d-bound", &d}
+        {"--upper-d-bound", &d},
+        {"-i", nullptr},
+        {"--interactive", nullptr}
     };
 
     // Parse command-line arguments
-    for (int i = 1; i < argc; i += 2) {
+    for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         auto it = argMap.find(arg);
-        if (it != argMap.end() && i + 1 < argc) {
-            *(it->second) = std::stoi(argv[i + 1]);
+
+        if (it != argMap.end()) {
+            if (it->second) {
+                if (i + 1 < argc) {
+                    *(it->second) = std::stoi(argv[i + 1]);
+                    ++i;
+                } else {
+                    std::cerr << "Error: Missing argument for " << arg << "\n";
+                    return 1;
+                }
+            } else {
+                interactive = true;
+            }
         } else {
-            std::cerr << "Error: Unknown option or missing argument for " << arg << "\n";
+            std::cerr << "Error: Unknown option " << arg << "\n";
             return 1;
         }
+    }
+
+    if (interactive){
+        get_input(K, "K");
+        get_input(n, "n");
+        get_input(m, "m");
+        get_input(a, "a");
+        get_input(b, "b");
+        get_input(c, "c");
+        get_input(d, "d");
     }
 
     if (K <= 0) {
@@ -287,26 +327,21 @@ int main(int argc, char *argv[]) {
     std::cout << "Starting simulation...\n";
     sleep(1);
 
-    // Initialize semaphores
-    pthread_mutex_init(&mutex, nullptr);
-    sem_init(&producer, 0, 1);
-    sem_init(&consumer, 0, 0);
-
     //initialize warehouse content
     setWarehouseContent(0);
-
-    // Create consumer threads
-    pthread_t consumer_threads[n];
-    for (int i = 0; i < n; ++i) {
-        int* threadId = new int(i);
-        pthread_create(&consumer_threads[i], nullptr, consumerThread, reinterpret_cast<void*>(threadId));
-    }
 
     // Create producer threads
     pthread_t producer_threads[m];
     for (int i = 0; i < m; ++i) {
         int* threadId = new int(i);
         pthread_create(&producer_threads[i], nullptr, producerThread, reinterpret_cast<void*>(threadId));
+    }
+
+    // Create consumer threads
+    pthread_t consumer_threads[n];
+    for (int i = 0; i < n; ++i) {
+        int* threadId = new int(i);
+        pthread_create(&consumer_threads[i], nullptr, consumerThread, reinterpret_cast<void*>(threadId));
     }
 
     // Wait for consumer threads to finish
@@ -318,11 +353,6 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < m; ++i) {
         pthread_join(producer_threads[i], nullptr);
     }
-
-    // Destroy mutex and semaphores
-    pthread_mutex_destroy(&mutex);
-    sem_destroy(&consumer);
-    sem_destroy(&producer);
 
     return 0;
 }
