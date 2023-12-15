@@ -1,0 +1,9 @@
+{
+    "warehaouseSize": 10,
+    "numberOfConsumers": 6,
+    "numberOfProducers": 6,
+    "a": 2,
+    "b": 3,
+    "c": 2,
+    "d": 4
+}

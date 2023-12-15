@@ -1,0 +1,2 @@
+ID: prod_0; Time stamp: 10:34:28; Message: Managed to produce 2 products; Warehouse content: 2
+ID: prod_0; Time stamp: 10:34:28; Message: Will produce 2 products next time; Warehouse content: 2
